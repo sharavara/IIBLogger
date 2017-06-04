@@ -1,0 +1,40 @@
+BROKER SCHEMA com.sharavara
+
+
+-- Transformation from the Domaine tree to the String
+CREATE FUNCTION serializeReferenceAsString(IN ref REFERENCE, IN fieldName CHARACTER) RETURNS CHARACTER
+BEGIN
+	IF NOT EXISTS(ref.*[]) THEN
+		RETURN '';
+	END IF;
+
+	DECLARE temp ROW;
+	CREATE LASTCHILD OF temp DOMAIN('XMLNSC');
+	SET temp.XMLNSC.{fieldName} = ref;
+	DECLARE messageBlob BLOB ASBITSTREAM(temp.XMLNSC CCSID 1208);
+	DECLARE ret CHARACTER;
+	SET ret = CAST(messageBlob AS CHARACTER CCSID 1208);
+	IF ret is null then
+		SET ret = 'null';
+	END IF;
+	RETURN ret;
+END;
+-- Get Only the last exception message
+CREATE PROCEDURE getLastExceptionDetail ( IN InputTree reference, OUT messageNumber integer, OUT messageText char)
+BEGIN
+	DECLARE ptrException REFERENCE TO InputTree;
+	DECLARE messageNuber1 INTEGER;
+	DECLARE messageText1 CHARACTER '';
+	WHILE lastmove(ptrException) DO
+		IF ptrException.Number is not null THEN
+			SET messageNumber = ptrException.Number;
+			SET messageText = ptrException.Text;
+		END IF;
+		MOVE ptrException LASTCHILD;
+	END WHILE;
+	SET messageText = '[' || messageText || '] '|| CAST(ptrException AS CHARACTER);
+	MOVE ptrException PARENT;
+	MOVE ptrException PREVIOUSSIBLING;
+	MOVE ptrException LASTCHILD;
+	SET messageText = messageText ||' - ' || CAST(ptrException AS CHARACTER);
+END;

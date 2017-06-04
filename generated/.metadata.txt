@@ -1,0 +1,284 @@
+7.0.0
+esql://routine/com.sharavara#IIBLogger_Bkp.Main = 
+CREATE SCHEMA com.sharavara PATH ""
+
+DECLARE ProcessExceptionFirst  EXTERNAL BOOLEAN false;
+DECLARE Emails  EXTERNAL CHARACTER '';
+DECLARE BackupQueue  EXTERNAL CHARACTER '';
+DECLARE LogQueue  EXTERNAL CHARACTER '';
+DECLARE DSN  EXTERNAL CHARACTER '';
+DECLARE Table  EXTERNAL CHARACTER '';
+DECLARE Service_URL  EXTERNAL CHARACTER '';
+DECLARE Service_Auth  EXTERNAL CHARACTER '';
+CREATE COMPUTE MODULE IIBLogger_Bkp
+	CREATE FUNCTION Main() RETURNS BOOLEAN
+	BEGIN
+		IF BackupQueue = '' THEN
+			RETURN FALSE;
+		END IF;
+
+		CALL CopyMessageHeaders();
+		CALL CopyEntireMessage();
+		SET OutputRoot.MQRFH2.usr.set = NULL;
+		SET OutputLocalEnvironment.Destination.MQDestinationList.DestinationData.queueName = BackupQueue;
+		RETURN TRUE;
+	END;
+
+	CREATE PROCEDURE CopyMessageHeaders() BEGIN
+		DECLARE I INTEGER 1;
+		DECLARE J INTEGER;
+		SET J = CARDINALITY(InputRoot.*[]);
+		WHILE I < J DO
+			SET OutputRoot.*[I] = InputRoot.*[I];
+			SET I = I + 1;
+		END WHILE;
+	END;
+
+	CREATE PROCEDURE CopyEntireMessage() BEGIN
+		SET OutputRoot = InputRoot;
+	END;
+END MODULE;
+esql://routine/com.sharavara#IIBLogger_Exception.Main = 
+CREATE SCHEMA com.sharavara PATH ""
+
+DECLARE ProcessExceptionFirst  EXTERNAL BOOLEAN false;
+DECLARE Emails  EXTERNAL CHARACTER '';
+DECLARE BackupQueue  EXTERNAL CHARACTER '';
+DECLARE LogQueue  EXTERNAL CHARACTER '';
+DECLARE DSN  EXTERNAL CHARACTER '';
+DECLARE Table  EXTERNAL CHARACTER '';
+DECLARE Service_URL  EXTERNAL CHARACTER '';
+DECLARE Service_Auth  EXTERNAL CHARACTER '';
+CREATE COMPUTE MODULE IIBLogger_Exception
+	CREATE FUNCTION Main() RETURNS BOOLEAN
+	BEGIN
+		SET OutputRoot.Properties.Encoding = 1208;
+		--SET OutputRoot.MQMD.CodedCharSetId = 1208;
+		--Settings
+		SET OutputRoot.MQRFH2.usr.set.Emails = Emails;
+		SET OutputRoot.MQRFH2.usr.set.BackupQueue = BackupQueue;
+		SET OutputRoot.MQRFH2.usr.set.DSN = DSN;
+		SET OutputRoot.MQRFH2.usr.set.Table = Table;
+		SET OutputRoot.MQRFH2.usr.set.Service_URL = Service_URL;
+		SET OutputRoot.MQRFH2.usr.set.Service_Auth = Service_Auth;
+		--Exception & Environment Information
+		SET OutputRoot.MQRFH2.usr.vs.BrokerName = SQL.BrokerName;
+		SET OutputRoot.MQRFH2.usr.vs.QueueManagerName = SQL.QueueManagerName;
+		SET OutputRoot.MQRFH2.usr.vs.ExecutionGroupLabel = SQL.ExecutionGroupLabel;
+		SET OutputRoot.MQRFH2.usr.vs.ApplicationLabel = SQL.ApplicationLabel;
+		SET OutputRoot.MQRFH2.usr.vs.MessageFlowLabel = SQL.MessageFlowLabel;
+		SET OutputRoot.MQRFH2.usr.vs.MsgID = SUBSTRING(CAST(InputRoot.MQMD.MsgId AS CHARACTER) from 3 for 48); --TODO Check for null
+		SET OutputRoot.MQRFH2.usr.vs.CorrelId = SUBSTRING(CAST(InputRoot.MQMD.CorrelId AS CHARACTER) from 3 for 48); --TODO Check for null
+		SET OutputRoot.MQRFH2.usr.vs.Timestamp = CAST(CURRENT_TIMESTAMP AS CHARACTER FORMAT 'I');
+		SET OutputRoot.MQRFH2.usr.vs.Exception = serializeReferenceAsString(InputExceptionList, 'Exception');
+		Call getLastExceptionDetail(InputExceptionList, OutputRoot.MQRFH2.usr.vs.ExceptionNumber, OutputRoot.MQRFH2.usr.vs.ExceptionText);
+		SET OutputRoot.MQRFH2.usr.vs.ExceptionText ='[IIB LOGGER EXCEPTION]' || OutputRoot.MQRFH2.usr.vs.ExceptionText;
+		SET OutputRoot.MQRFH2.usr.vs.Properties = serializeReferenceAsString(InputRoot.Properties , 'Properties');
+		SET OutputRoot.MQRFH2.usr.vs.MQMD = serializeReferenceAsString(InputRoot.MQMD, 'MQMD');
+		--Log Queue
+		SET OutputLocalEnvironment.Destination.MQDestinationList.DestinationData.queueName = LogQueue;
+		RETURN TRUE;
+	END;
+
+END MODULE;CREATE FUNCTION serializeReferenceAsString(IN ref REFERENCE, IN fieldName CHARACTER) RETURNS CHARACTER
+BEGIN
+	IF NOT EXISTS(ref.*[]) THEN
+		RETURN '';
+	END IF;
+
+	DECLARE temp ROW;
+	CREATE LASTCHILD OF temp DOMAIN('XMLNSC');
+	SET temp.XMLNSC.{fieldName} = ref;
+	DECLARE messageBlob BLOB ASBITSTREAM(temp.XMLNSC CCSID 1208);
+	DECLARE ret CHARACTER;
+	SET ret = CAST(messageBlob AS CHARACTER CCSID 1208);
+	IF ret is null then
+		SET ret = 'null';
+	END IF;
+	RETURN ret;
+END;
+CREATE PROCEDURE getLastExceptionDetail ( IN InputTree reference, OUT messageNumber integer, OUT messageText char)
+BEGIN
+	DECLARE ptrException REFERENCE TO InputTree;
+	DECLARE messageNuber1 INTEGER;
+	DECLARE messageText1 CHARACTER '';
+	WHILE lastmove(ptrException) DO
+		IF ptrException.Number is not null THEN
+			SET messageNumber = ptrException.Number;
+			SET messageText = ptrException.Text;
+		END IF;
+		MOVE ptrException LASTCHILD;
+	END WHILE;
+	SET messageText = '[' || messageText || '] '|| CAST(ptrException AS CHARACTER);
+	MOVE ptrException PARENT;
+	MOVE ptrException PREVIOUSSIBLING;
+	MOVE ptrException LASTCHILD;
+	SET messageText = messageText ||' - ' || CAST(ptrException AS CHARACTER);
+END;
+
+esql://routine/com.sharavara#IIBLogger_GatherData.Main = 
+CREATE SCHEMA com.sharavara PATH ""
+
+DECLARE ProcessExceptionFirst  EXTERNAL BOOLEAN false;
+DECLARE Emails  EXTERNAL CHARACTER '';
+DECLARE BackupQueue  EXTERNAL CHARACTER '';
+DECLARE LogQueue  EXTERNAL CHARACTER '';
+DECLARE DSN  EXTERNAL CHARACTER '';
+DECLARE Table  EXTERNAL CHARACTER '';
+DECLARE Service_URL  EXTERNAL CHARACTER '';
+DECLARE Service_Auth  EXTERNAL CHARACTER '';
+CREATE COMPUTE MODULE IIBLogger_GatherData
+	CREATE FUNCTION Main() RETURNS BOOLEAN
+	BEGIN
+		DECLARE ref REFERENCE TO InputRoot.MQRFH2;
+		MOVE ref TO InputRoot.MQMD;
+		IF NOT LASTMOVE(ref) THEN
+			SET OutputRoot.Properties = InputRoot.Properties;
+			CREATE LASTCHILD OF OutputRoot DOMAIN 'MQMD';
+			SET OutputRoot.MQMD.CodedCharSetId = 1208;
+			CREATE LASTCHILD OF OutputRoot DOMAIN 'MQRFH2';			
+			IF CARDINALITY(InputRoot.*[])=1 THEN
+			  	SET OutputRoot.BLOB.BLOB = CAST('' AS BLOB CCSID 1208);
+			ELSE
+				SET OutputRoot.*[4] = InputRoot.[<];
+			END IF;		 	
+		ELSE
+			CALL CopyEntireMessage();
+			MOVE ref TO OutputRoot.MQRFH2;
+			IF NOT LASTMOVE(ref) THEN
+				CREATE NEXTSIBLING OF OutputRoot.MQMD AS ref DOMAIN 'MQRFH2';
+				SET ref.(MQRFH2.Field)Encoding = InputRoot.MQMD.Encoding;
+				SET ref.(MQRFH2.Field)CodedCharSetId = InputRoot.MQMD.CodedCharSetId;
+				SET ref.(MQRFH2.Field)Format = InputRoot.MQMD.Format;
+			END IF;
+		END IF;		
+		
+		--Settings
+		SET OutputRoot.MQRFH2.usr.set.Emails = Emails;
+		SET OutputRoot.MQRFH2.usr.set.BackupQueue = BackupQueue;
+		SET OutputRoot.MQRFH2.usr.set.DSN = DSN;
+		SET OutputRoot.MQRFH2.usr.set.Table = Table;
+		SET OutputRoot.MQRFH2.usr.set.Service_URL = Service_URL;
+		SET OutputRoot.MQRFH2.usr.set.Service_Auth = Service_Auth;
+		--Exception & Environment Information
+		SET OutputRoot.MQRFH2.usr.vs.BrokerName = SQL.BrokerName;
+		SET OutputRoot.MQRFH2.usr.vs.QueueManagerName = SQL.QueueManagerName;
+		SET OutputRoot.MQRFH2.usr.vs.ExecutionGroupLabel = SQL.ExecutionGroupLabel;
+		SET OutputRoot.MQRFH2.usr.vs.ApplicationLabel = ApplicationLabel;
+		SET OutputRoot.MQRFH2.usr.vs.MessageFlowLabel = SQL.MessageFlowLabel;
+		SET OutputRoot.MQRFH2.usr.vs.MsgID = SUBSTRING(CAST(InputRoot.MQMD.MsgId AS CHARACTER) from 3 for 48);
+		SET OutputRoot.MQRFH2.usr.vs.CorrelId = SUBSTRING(CAST(InputRoot.MQMD.CorrelId AS CHARACTER) from 3 for 48);
+		SET OutputRoot.MQRFH2.usr.vs.Timestamp = CAST(CURRENT_TIMESTAMP AS CHARACTER FORMAT 'I');
+		SET OutputRoot.MQRFH2.usr.vs.Exception = serializeReferenceAsString(InputExceptionList, 'Exception');
+		Call getLastExceptionDetail(InputExceptionList, OutputRoot.MQRFH2.usr.vs.ExceptionNumber, OutputRoot.MQRFH2.usr.vs.ExceptionText);
+		SET OutputRoot.MQRFH2.usr.vs.LocalEnvironment = serializeReferenceAsString(InputLocalEnvironment, 'LocalEnvironment');
+		SET OutputRoot.MQRFH2.usr.vs.Environment = serializeReferenceAsString(Environment, 'Environment');
+		SET OutputRoot.MQRFH2.usr.vs.Properties = serializeReferenceAsString(InputRoot.Properties , 'Properties');
+		SET OutputRoot.MQRFH2.usr.vs.MQMD = serializeReferenceAsString(InputRoot.MQMD, 'MQMD');
+		IF EXISTS(InputRoot.HTTPInputHeader[]) THEN
+			SET OutputRoot.MQRFH2.usr.vs.HTTPInputHeader = serializeReferenceAsString(InputRoot.HTTPInputHeader , 'HTTPInputHeader');
+		END IF;
+		IF EXISTS(InputRoot.HTTPReplyHeader[]) THEN
+			SET OutputRoot.MQRFH2.usr.vs.HTTPReplyHeader = serializeReferenceAsString(InputRoot.HTTPReplyHeader , 'HTTPReplyHeader');
+		END IF;
+		IF EXISTS(InputRoot.HTTPRequestHeader[]) THEN
+			SET OutputRoot.MQRFH2.usr.vs.HTTPRequestHeader = serializeReferenceAsString(InputRoot.HTTPRequestHeader, 'HTTPRequestHeader');
+		END IF;
+		IF EXISTS(InputRoot.HTTPResponseHeader[]) THEN
+			SET OutputRoot.MQRFH2.usr.vs.HTTPResponseHeader = serializeReferenceAsString(InputRoot.HTTPResponseHeader, 'HTTPResponseHeader');
+		END IF;
+		--Log Queue
+		--SET OutputLocalEnvironment.Destination.MQDestinationList.DestinationData.persistenceMode = 'yes';
+		SET OutputLocalEnvironment.Destination.MQDestinationList.DestinationData.queueName = LogQueue;
+		RETURN TRUE;
+	END;
+
+	CREATE PROCEDURE CopyMessageHeaders() BEGIN
+		DECLARE I INTEGER 1;
+		DECLARE J INTEGER;
+		SET J = CARDINALITY(InputRoot.*[]);
+		WHILE I < J DO
+			SET OutputRoot.*[I] = InputRoot.*[I];
+			SET I = I + 1;
+		END WHILE;
+	END;
+
+	CREATE PROCEDURE CopyEntireMessage() BEGIN
+		SET OutputRoot = InputRoot;
+	END;
+END MODULE;CREATE FUNCTION serializeReferenceAsString(IN ref REFERENCE, IN fieldName CHARACTER) RETURNS CHARACTER
+BEGIN
+	IF NOT EXISTS(ref.*[]) THEN
+		RETURN '';
+	END IF;
+
+	DECLARE temp ROW;
+	CREATE LASTCHILD OF temp DOMAIN('XMLNSC');
+	SET temp.XMLNSC.{fieldName} = ref;
+	DECLARE messageBlob BLOB ASBITSTREAM(temp.XMLNSC CCSID 1208);
+	DECLARE ret CHARACTER;
+	SET ret = CAST(messageBlob AS CHARACTER CCSID 1208);
+	IF ret is null then
+		SET ret = 'null';
+	END IF;
+	RETURN ret;
+END;
+CREATE PROCEDURE getLastExceptionDetail ( IN InputTree reference, OUT messageNumber integer, OUT messageText char)
+BEGIN
+	DECLARE ptrException REFERENCE TO InputTree;
+	DECLARE messageNuber1 INTEGER;
+	DECLARE messageText1 CHARACTER '';
+	WHILE lastmove(ptrException) DO
+		IF ptrException.Number is not null THEN
+			SET messageNumber = ptrException.Number;
+			SET messageText = ptrException.Text;
+		END IF;
+		MOVE ptrException LASTCHILD;
+	END WHILE;
+	SET messageText = '[' || messageText || '] '|| CAST(ptrException AS CHARACTER);
+	MOVE ptrException PARENT;
+	MOVE ptrException PREVIOUSSIBLING;
+	MOVE ptrException LASTCHILD;
+	SET messageText = messageText ||' - ' || CAST(ptrException AS CHARACTER);
+END;
+
+esql://routine/com.sharavara#IIBLogger_Order.Main = 
+CREATE SCHEMA com.sharavara PATH ""
+
+DECLARE ProcessExceptionFirst  EXTERNAL BOOLEAN false;
+DECLARE Emails  EXTERNAL CHARACTER '';
+DECLARE BackupQueue  EXTERNAL CHARACTER '';
+DECLARE LogQueue  EXTERNAL CHARACTER '';
+DECLARE DSN  EXTERNAL CHARACTER '';
+DECLARE Table  EXTERNAL CHARACTER '';
+DECLARE Service_URL  EXTERNAL CHARACTER '';
+DECLARE Service_Auth  EXTERNAL CHARACTER '';
+CREATE COMPUTE MODULE IIBLogger_Order
+	CREATE FUNCTION Main() RETURNS BOOLEAN
+	BEGIN
+		SET OutputLocalEnvironment = InputLocalEnvironment;
+		IF ProcessExceptionFirst THEN
+			PROPAGATE TO TERMINAL 'out1' DELETE NONE;
+			PROPAGATE TO TERMINAL 'out';
+		ELSE
+			PROPAGATE TO TERMINAL 'out' DELETE NONE;
+			PROPAGATE TO TERMINAL 'out1';	
+		END IF;
+		
+		RETURN FALSE;
+	END;
+
+	CREATE PROCEDURE CopyMessageHeaders() BEGIN
+		DECLARE I INTEGER 1;
+		DECLARE J INTEGER;
+		SET J = CARDINALITY(InputRoot.*[]);
+		WHILE I < J DO
+			SET OutputRoot.*[I] = InputRoot.*[I];
+			SET I = I + 1;
+		END WHILE;
+	END;
+
+	CREATE PROCEDURE CopyEntireMessage() BEGIN
+		SET OutputRoot = InputRoot;
+	END;
+END MODULE;

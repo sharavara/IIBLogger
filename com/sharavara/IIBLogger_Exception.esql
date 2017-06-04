@@ -1,0 +1,34 @@
+BROKER SCHEMA com.sharavara
+
+CREATE COMPUTE MODULE IIBLogger_Exception
+	CREATE FUNCTION Main() RETURNS BOOLEAN
+	BEGIN
+		SET OutputRoot.Properties.Encoding = 1208;
+		--SET OutputRoot.MQMD.CodedCharSetId = 1208;
+		--Settings
+		SET OutputRoot.MQRFH2.usr.set.Emails = Emails;
+		SET OutputRoot.MQRFH2.usr.set.BackupQueue = BackupQueue;
+		SET OutputRoot.MQRFH2.usr.set.DSN = DSN;
+		SET OutputRoot.MQRFH2.usr.set.Table = Table;
+		SET OutputRoot.MQRFH2.usr.set.Service_URL = Service_URL;
+		SET OutputRoot.MQRFH2.usr.set.Service_Auth = Service_Auth;
+		--Exception & Environment Information
+		SET OutputRoot.MQRFH2.usr.vs.BrokerName = SQL.BrokerName;
+		SET OutputRoot.MQRFH2.usr.vs.QueueManagerName = SQL.QueueManagerName;
+		SET OutputRoot.MQRFH2.usr.vs.ExecutionGroupLabel = SQL.ExecutionGroupLabel;
+		SET OutputRoot.MQRFH2.usr.vs.ApplicationLabel = SQL.ApplicationLabel;
+		SET OutputRoot.MQRFH2.usr.vs.MessageFlowLabel = SQL.MessageFlowLabel;
+		SET OutputRoot.MQRFH2.usr.vs.MsgID = SUBSTRING(CAST(InputRoot.MQMD.MsgId AS CHARACTER) from 3 for 48); --TODO Check for null
+		SET OutputRoot.MQRFH2.usr.vs.CorrelId = SUBSTRING(CAST(InputRoot.MQMD.CorrelId AS CHARACTER) from 3 for 48); --TODO Check for null
+		SET OutputRoot.MQRFH2.usr.vs.Timestamp = CAST(CURRENT_TIMESTAMP AS CHARACTER FORMAT 'I');
+		SET OutputRoot.MQRFH2.usr.vs.Exception = serializeReferenceAsString(InputExceptionList, 'Exception');
+		Call getLastExceptionDetail(InputExceptionList, OutputRoot.MQRFH2.usr.vs.ExceptionNumber, OutputRoot.MQRFH2.usr.vs.ExceptionText);
+		SET OutputRoot.MQRFH2.usr.vs.ExceptionText ='[IIB LOGGER EXCEPTION]' || OutputRoot.MQRFH2.usr.vs.ExceptionText;
+		SET OutputRoot.MQRFH2.usr.vs.Properties = serializeReferenceAsString(InputRoot.Properties , 'Properties');
+		SET OutputRoot.MQRFH2.usr.vs.MQMD = serializeReferenceAsString(InputRoot.MQMD, 'MQMD');
+		--Log Queue
+		SET OutputLocalEnvironment.Destination.MQDestinationList.DestinationData.queueName = LogQueue;
+		RETURN TRUE;
+	END;
+
+END MODULE;
